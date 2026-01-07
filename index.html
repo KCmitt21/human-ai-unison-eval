@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>人間ーAI斉唱の自然性主観評価</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 24px; line-height: 1.6; }
+    .container { max-width: 780px; margin: 0 auto; }
+    h1 { font-size: 1.6rem; margin-bottom: 0.5rem; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-top: 14px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .muted { color: #555; font-size: 0.95rem; }
+    .progress { font-weight: 600; }
+    .likert button {
+      min-width: 44px; padding: 10px 12px; border-radius: 10px;
+      border: 1px solid #bbb; background: #fff; cursor: pointer;
+      font-size: 1rem;
+    }
+    .likert button.selected { border-color: #000; background: #f0f0f0; }
+    .nav button {
+      padding: 10px 14px; border-radius: 10px; border: 1px solid #bbb; background: #fff; cursor: pointer;
+    }
+    .nav button.primary { border-color: #000; }
+    .nav button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .warn { color: #b00020; font-weight: 600; }
+    .small { font-size: 0.9rem; }
+    code { background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>人間ーAI斉唱の自然性主観評価</h1>
+    <div class="muted">
+      音声を再生し、自然性を <b>1（不自然）〜5（自然）</b> の5段階で評価してください。
+      すべての評価が終わったら結果をダウンロードできます。
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content: space-between;">
+        <div class="progress" id="progressText">1 / 90</div>
+        <div class="muted small" id="fileText">audio/...</div>
+      </div>
+
+      <div style="margin-top: 12px;">
+        <audio id="player" controls preload="none" style="width: 100%;"></audio>
+      </div>
+
+      <div style="margin-top: 14px;">
+        <div class="muted">評価（クリック）</div>
+        <div class="row likert" id="likertButtons" style="margin-top: 8px;"></div>
+        <div class="small muted" style="margin-top: 6px;">
+          選択中の評価：<span id="currentRating">未選択</span>
+        </div>
+        <div class="warn small" id="warning" style="display:none; margin-top: 6px;">
+          評価を選んでから「次へ」を押してください。
+        </div>
+      </div>
+
+      <div class="row nav" style="margin-top: 16px; justify-content: space-between;">
+        <button id="prevBtn">前へ</button>
+        <div class="row">
+          <button id="saveLocalBtn" title="ブラウザに一時保存します">途中保存</button>
+          <button id="nextBtn" class="primary">次へ</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content: space-between;">
+        <div><b>提出（結果の出力）</b></div>
+        <div class="muted small">完了状況：<span id="doneText">0 / 90</span></div>
+      </div>
+
+      <div class="muted small" style="margin-top: 8px;">
+        - <code>途中保存</code>：このPCのブラウザに保存（再読み込み後も復元可能）<br/>
+        - <code>CSV</code>：結果ファイルをダウンロード（Googleフォーム提出用）<br/>
+        ※ <b>全90個の評価が終わるまで</b>、提出（ダウンロード）ボタンは無効です。
+      </div>
+
+      <div class="row" style="margin-top: 12px;">
+        <button id="loadLocalBtn">途中保存を復元</button>
+        <button id="downloadCsvBtn" disabled>CSVをダウンロード</button>
+        <button id="clearBtn" title="保存も含めて初期化します">リセット</button>
+      </div>
+
+      <div class="muted small" style="margin-top: 10px;">
+        被験者ID：<span id="subjectIdText">-</span>（このブラウザに保存されます）
+      </div>
+
+    </div>
+  </div>
+
+<script>
+(() => {
+  // =========================================================
+  // 1) 音声リスト自動生成（あなたのディレクトリ構造に合わせる）
+  // =========================================================
+  // ここは実際のディレクトリ名に合わせて必ず修正してください。
+  const roots = [
+    { gender: "man",   root: "audio/audio_results_men" },
+    { gender: "woman", root: "audio/audio_results_women" }, 
+  ];
+
+  // 条件（ファイル名 suffix は実データに合わせて調整）
+  const conditions = [
+    { name: "baseline",   folder: "baseline",   suffix: "baseline" },
+    { name: "proposed_1", folder: "proposed_1", suffix: "1st" },
+    { name: "proposed_2", folder: "proposed_2", suffix: "2nd" },
+    { name: "proposed_3", folder: "proposed_3", suffix: "3rd" },
+    { name: "proposed_4", folder: "proposed_4", suffix: "4th" },
+  ];
+
+  // 曲とテイク（ここを実データに合わせて増やす：72個になるよう調整）
+  const items = [
+    { song: "Aka_Tonbo", takes: [1, 2, 3] },
+    { song: "Furusato", takes: [1, 2, 3] },
+    { song: "Harugakita", takes: [1, 2, 3] },
+    // { song: "Some_Song", takes: [1,2,3] },
+  ];
+
+  const audioList = [];
+  for (const r of roots) {
+    for (const c of conditions) {
+      for (const it of items) {
+        for (const take of it.takes) {
+          // 例: Aka_Tonbo_1_man_baseline.wav / Aka_Tonbo_1_man_1st.wav
+          const file = `${it.song}_${take}_${r.gender}_${c.suffix}.wav`;
+          audioList.push(`${r.root}/${c.folder}/${file}`);
+        }
+      }
+    }
+  }
+
+  // デバッグ：90個になっているか確認
+  console.log("audioList length =", audioList.length);
+
+  // =========================================================
+  // 2) ランダム提示（被験者ごとに順序固定：localStorageに保存）
+  // =========================================================
+  function shuffleInPlace(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+  }
+
+  const ORDER_KEY = "chorus_order_v1";
+  const savedOrder = localStorage.getItem(ORDER_KEY);
+
+  if (savedOrder) {
+    try {
+      const parsed = JSON.parse(savedOrder);
+      if (Array.isArray(parsed) && parsed.length === audioList.length) {
+        for (let i = 0; i < audioList.length; i++) audioList[i] = parsed[i];
+      } else {
+        shuffleInPlace(audioList);
+        localStorage.setItem(ORDER_KEY, JSON.stringify(audioList));
+      }
+    } catch {
+      shuffleInPlace(audioList);
+      localStorage.setItem(ORDER_KEY, JSON.stringify(audioList));
+    }
+  } else {
+    shuffleInPlace(audioList);
+    localStorage.setItem(ORDER_KEY, JSON.stringify(audioList));
+  }
+
+  // =========================================================
+  // 3) 状態
+  // =========================================================
+  let idx = 0; // 0..(audioList.length-1)
+  // ratings[i] = { rating: 1..5, ts: ISOString }
+  let ratings = {};
+
+  // =========================================================
+  // 4) DOM
+  // =========================================================
+  const player = document.getElementById('player');
+  const progressText = document.getElementById('progressText');
+  const fileText = document.getElementById('fileText');
+  const likertButtons = document.getElementById('likertButtons');
+  const currentRating = document.getElementById('currentRating');
+  const warning = document.getElementById('warning');
+  const doneText = document.getElementById('doneText');
+
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const saveLocalBtn = document.getElementById('saveLocalBtn');
+  const loadLocalBtn = document.getElementById('loadLocalBtn');
+  const downloadCsvBtn = document.getElementById('downloadCsvBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const subjectIdText = document.getElementById('subjectIdText');
+
+  // =========================================================
+  // 5) UI生成（1〜5ボタン）
+  // =========================================================
+  const makeLikert = () => {
+    likertButtons.innerHTML = '';
+    for (let r = 1; r <= 5; r++) {
+      const b = document.createElement('button');
+      b.textContent = r;
+      b.addEventListener('click', () => {
+        ratings[idx] = { rating: r, ts: new Date().toISOString() };
+        warning.style.display = 'none';
+        render();
+      });
+      likertButtons.appendChild(b);
+    }
+  };
+
+  // =========================================================
+  // 6) 画面描画（提出ボタン制御もここに入れる）
+  // =========================================================
+  const render = () => {
+    const total = audioList.length;
+    const currentFile = audioList[idx];
+
+    // 音声
+    if (player.src !== new URL(currentFile, location.href).href) {
+      player.src = currentFile;
+      player.load();
+    }
+
+    // 進捗
+    progressText.textContent = `${idx + 1} / ${total}`;
+    fileText.textContent = currentFile;
+
+    // 評価表示
+    const saved = ratings[idx]?.rating ?? null;
+    currentRating.textContent = saved ? String(saved) : '未選択';
+
+    // ボタンの見た目
+    [...likertButtons.querySelectorAll('button')].forEach((b) => {
+      b.classList.toggle('selected', saved && b.textContent === String(saved));
+    });
+
+    // nav
+    prevBtn.disabled = (idx === 0);
+    nextBtn.textContent = (idx === total - 1) ? '最後（完了へ）' : '次へ';
+
+    // 完了状況
+    const done = Object.keys(ratings).length;
+    doneText.textContent = `${done} / ${total}`;
+
+    // =====================================================
+    // 3) 全部終わるまで提出（ダウンロード）ボタンを押せない
+    // =====================================================
+    const allDone = (done === total);
+    downloadCsvBtn.disabled  = !allDone;
+    downloadCsvBtn.title  = allDone ? "" : "全ての音声を評価すると有効になります";
+
+    // 被験者ID表示
+    subjectIdText.textContent = getOrCreateSubjectId();
+  };
+
+  // =========================================================
+  // 7) 移動処理（未評価チェック付き）
+  // =========================================================
+  const go = (delta) => {
+    const next = idx + delta;
+    if (next < 0 || next >= audioList.length) return;
+    idx = next;
+    warning.style.display = 'none';
+    render();
+  };
+
+  const goNext = () => {
+    // 次へは「現在の項目が評価済み」必須にする
+    if (!ratings[idx]?.rating) {
+      warning.style.display = 'block';
+      return;
+    }
+    if (idx === audioList.length - 1) {
+      alert('最後まで到達しました。全て評価済みなら「CSVをダウンロード」が有効になります。');
+      return;
+    }
+    go(+1);
+  };
+
+  // =========================================================
+  // 8) 途中保存（localStorage）
+  // =========================================================
+  const LS_KEY = 'chorus_naturalness_ratings_v1';
+
+  const SUBJECT_KEY = 'chorus_subject_id_v1';
+  const getOrCreateSubjectId = () => {
+    let sid = localStorage.getItem(SUBJECT_KEY);
+    if (!sid) {
+      // 例: S-20260107-<random>
+      const rand = Math.random().toString(16).slice(2, 8);
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2,'0');
+      const da = String(d.getDate()).padStart(2,'0');
+      sid = `S-${y}${m}${da}-${rand}`;
+      localStorage.setItem(SUBJECT_KEY, sid);
+    }
+    return sid;
+  };
+
+
+  const saveLocal = () => {
+    const payload = { idx, audioList, ratings, savedAt: new Date().toISOString() };
+    localStorage.setItem(LS_KEY, JSON.stringify(payload));
+    alert('途中保存しました（このブラウザに保存）。');
+  };
+
+  const loadLocal = () => {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) {
+      alert('途中保存データが見つかりません。');
+      return;
+    }
+    try {
+      const payload = JSON.parse(raw);
+      ratings = payload.ratings || {};
+      idx = Number.isFinite(payload.idx) ? payload.idx : 0;
+
+      // audioListの順序も復元したい場合（ORDER_KEYを優先するならここは不要）
+      // ここでは payload.audioList があればそれを採用（長さ一致時のみ）
+      if (Array.isArray(payload.audioList) && payload.audioList.length === audioList.length) {
+        for (let i = 0; i < audioList.length; i++) audioList[i] = payload.audioList[i];
+        localStorage.setItem(ORDER_KEY, JSON.stringify(audioList));
+      }
+
+      alert('途中保存データを復元しました。');
+      render();
+    } catch {
+      alert('途中保存データの読み込みに失敗しました。');
+    }
+  };
+
+  const clearAll = () => {
+    if (!confirm('評価データをリセットします。よろしいですか？')) return;
+    ratings = {};
+    idx = 0;
+    localStorage.removeItem(LS_KEY);
+    localStorage.removeItem(ORDER_KEY);
+    // リセット後は新しい順序にしたいなら再シャッフル
+    shuffleInPlace(audioList);
+    localStorage.setItem(ORDER_KEY, JSON.stringify(audioList));
+    render();
+  };
+
+  // =========================================================
+  // 9) 結果のダウンロード
+  // =========================================================
+  const download = (filename, text, mime) => {
+    const blob = new Blob([text], { type: mime });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const downloadCsv = () => {
+    // CSV: subjectId, exportedAt, index, file, rating, timestamp
+    const rows = [];
+    const subjectId = getOrCreateSubjectId();
+    const exportedAt = new Date().toISOString();
+    rows.push(['subjectId', 'exportedAt', 'index', 'file', 'rating', 'timestamp'].join(','));
+    for (let i = 0; i < audioList.length; i++) {
+      const file = audioList[i];
+      const r = ratings[i]?.rating ?? '';
+      const ts = ratings[i]?.ts ?? '';
+      rows.push([subjectId, exportedAt, i + 1, file, r, ts].map(x => `"${String(x).replaceAll('"','""')}"`).join(','));
+    }
+    download('ratings.csv', rows.join('\n'), 'text/csv');
+  };
+
+  // =========================================================
+  // 10) イベント
+  // =========================================================
+  prevBtn.addEventListener('click', () => go(-1));
+  nextBtn.addEventListener('click', goNext);
+  saveLocalBtn.addEventListener('click', saveLocal);
+  loadLocalBtn.addEventListener('click', loadLocal);
+  downloadCsvBtn.addEventListener('click', downloadCsv);
+  clearBtn.addEventListener('click', clearAll);
+
+  // 初期化
+  makeLikert();
+  render();
+})();
+</script>
+</body>
+</html>
